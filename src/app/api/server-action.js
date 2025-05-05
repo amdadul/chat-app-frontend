@@ -74,6 +74,16 @@ export const uploadFilesToServer = async (formData) => {
   return result;
 };
 
+export const readMessage = async (readData) => {
+  console.log(readData);
+  const result = await apiRequestWithServer(
+    `${process.env.BASE_URL}/users/messages/mark-as-read`,
+    "POST",
+    readData
+  );
+  return result;
+};
+
 export const uploadSingleFilesToServer = async (formData) => {
   const result = await fileUploadWithServer(
     `${process.env.BASE_URL}/users/upload-single`,

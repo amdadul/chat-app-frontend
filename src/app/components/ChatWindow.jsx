@@ -37,6 +37,7 @@ export default function ChatWindow({ session }) {
           senderName: session?.user?.name,
           groupId: selectedFriend?.id,
           timestamp: new Date(),
+          isRead: 0,
         },
       ]);
     } else {
@@ -48,6 +49,7 @@ export default function ChatWindow({ session }) {
           sender: true,
           senderName: session?.user?.name,
           timestamp: new Date(),
+          isRead: 0,
         },
       ]);
     }
@@ -97,6 +99,16 @@ export default function ChatWindow({ session }) {
         selectedFriend?.type == "friend" ? selectedFriend?.id : "",
         selectedFriend?.type == "group" ? selectedFriend?.id : ""
       );
+
+      const readData = {
+        friendId: selectedFriend?.type === "friend" ? selectedFriend?.id : null,
+        groupId: selectedFriend?.type === "group" ? selectedFriend?.id : null,
+        readerId: session?.user?.id,
+      };
+
+      socket.emit("mark-as-read", readData);
+      //const read = await readMessage(readData);
+
       setMessages(data);
     } catch (error) {
       console.error("Error fetching messages:", error);
@@ -105,7 +117,6 @@ export default function ChatWindow({ session }) {
 
   // Call fetchMessages only when the selectedFriend or session changes
   useEffect(() => {
-    console.log(selectedFriend);
     if (selectedFriend && session?.user?.id) {
       fetchMessages();
     }
@@ -114,6 +125,13 @@ export default function ChatWindow({ session }) {
   useEffect(() => {
     if (!socket || !selectedFriend) return;
     // Listen for the incoming message
+
+    const readData = {
+      friendId: selectedFriend?.type === "friend" ? selectedFriend?.id : null,
+      groupId: selectedFriend?.type === "group" ? selectedFriend?.id : null,
+      readerId: session?.user?.id,
+    };
+
     const handlePrivateMessage = ({
       message,
       fileUrls,
@@ -126,6 +144,7 @@ export default function ChatWindow({ session }) {
         ...prevMessages,
         { text: message, fileUrls, sender: isSender, senderName, timestamp },
       ]);
+      socket.emit("mark-as-read", readData);
     };
 
     const handleGroupMessage = ({
@@ -135,10 +154,10 @@ export default function ChatWindow({ session }) {
       senderName,
       groupId,
       timestamp,
+      isRead,
     }) => {
       if (groupId !== selectedFriend?.id) return; // Ignore messages from other groups
       const isSender = senderId === session?.user?._id;
-      console.log(senderId);
       setMessages((prevMessages) => [
         ...prevMessages,
         {
@@ -148,25 +167,56 @@ export default function ChatWindow({ session }) {
           senderName,
           groupId,
           timestamp,
+          isRead,
         },
       ]);
+      socket.emit("mark-as-read", readData);
     };
 
+    const handleReadMessageUpdate = () => {
+      setMessages((prevMessages) =>
+        prevMessages.map((msg) => {
+          const isUnread = msg.isRead === 0;
+
+          if (isUnread) {
+            return { ...msg, isRead: true };
+          }
+          return msg;
+        })
+      );
+    };
+
+    socket.on("readMessageUpdate", (data) => {
+      handleReadMessageUpdate();
+    });
     socket.on("receiveMessage", handlePrivateMessage);
     socket.on("receiveGroupMessage", handleGroupMessage);
 
     return () => {
+      socket.off("readMessageUpdate", handleReadMessageUpdate);
       socket.off("receiveMessage", handlePrivateMessage);
       socket.off("receiveGroupMessage", handleGroupMessage);
     };
   }, [socket, session, selectedFriend]);
 
   if (selectedScreen === "audio") {
-    return <AudioCallScreen onBack={() => setSelectedScreen("chat")} />;
+    return (
+      <AudioCallScreen
+        onBack={() => setSelectedScreen("chat")}
+        session={session}
+        socket={socket}
+      />
+    );
   }
 
   if (selectedScreen === "video") {
-    return <VideoCallScreen onBack={() => setSelectedScreen("chat")} />;
+    return (
+      <VideoCallScreen
+        onBack={() => setSelectedScreen("chat")}
+        session={session}
+        socket={socket}
+      />
+    );
   }
 
   if (selectedScreen === "profile") {
@@ -221,7 +271,7 @@ export default function ChatWindow({ session }) {
               fileUrls={msg.fileUrls}
               isSender={msg.sender}
               senderName={msg.senderName}
-              status="seen" // Options: "pending", "sent", "seen"
+              status={msg.isRead == 1 ? "seen" : "sent"} // Options: "pending", "sent", "seen"
               time={msg.timestamp}
               lastMessage={idx === messages.length - 1}
             />

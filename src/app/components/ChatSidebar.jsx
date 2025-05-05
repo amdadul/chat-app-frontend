@@ -34,6 +34,13 @@ export default function ChatSidebar({ onSelect, session }) {
   const handleOpenPopup = () => setOpen(true);
   const handleClosePopup = () => setOpen(false);
 
+  const playNotificationSound = () => {
+    const audio = new Audio("/sounds/notification4.wav"); // Adjust path as needed
+    audio.play().catch((err) => {
+      console.warn("Autoplay failed:", err);
+    });
+  };
+
   useEffect(() => {
     if (!socket || !session?.user?.id) return;
     socket.emit("userOnline", session?.user?.id);
@@ -49,7 +56,23 @@ export default function ChatSidebar({ onSelect, session }) {
       }
     };
 
+    const handleMessageUpdate = () => {
+      fetchFriends(); // Refresh chat list with updated lastMessage and unread status
+    };
+
+    const playNotification = () => {
+      playNotificationSound();
+    };
+
+    socket.on("messageUpdate", handleMessageUpdate);
+    socket.on("playNotification", playNotification);
+
     fetchFriends();
+
+    return () => {
+      socket.off("messageUpdate", handleMessageUpdate);
+      socket.off("playNotification", playNotification);
+    };
   }, [session?.user?.id, socket]); // Empty dependency array = runs once on mount
 
   const renderContent = () => {
@@ -83,9 +106,9 @@ export default function ChatSidebar({ onSelect, session }) {
                       <h2 className="font-medium text-sm">
                         {friend?.name}
 
-                        {true && (
+                        {friend?.unreadCount > 0 && (
                           <span className="ml-2 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                            {1}
+                            {friend?.unreadCount}
                           </span>
                         )}
                         {friend?.type === "group" && (
