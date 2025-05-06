@@ -136,41 +136,46 @@ export default function ChatWindow({ session }) {
       message,
       fileUrls,
       senderId,
+      receiverId,
       senderName,
       timestamp,
     }) => {
-      const isSender = senderId === session?.user?._id;
-      setMessages((prevMessages) => [
-        ...prevMessages,
-        { text: message, fileUrls, sender: isSender, senderName, timestamp },
-      ]);
-      socket.emit("mark-as-read", readData);
+      if (senderId === selectedFriend?.id) {
+        const isSender = senderId === session?.user?._id;
+        setMessages((prevMessages) => [
+          ...prevMessages,
+          { text: message, fileUrls, sender: isSender, senderName, timestamp },
+        ]);
+        socket.emit("mark-as-read", readData);
+      }
     };
 
     const handleGroupMessage = ({
       message,
       fileUrls,
       senderId,
+      receiverId,
       senderName,
       groupId,
       timestamp,
       isRead,
     }) => {
-      if (groupId !== selectedFriend?.id) return; // Ignore messages from other groups
-      const isSender = senderId === session?.user?._id;
-      setMessages((prevMessages) => [
-        ...prevMessages,
-        {
-          text: message,
-          fileUrls,
-          sender: isSender,
-          senderName,
-          groupId,
-          timestamp,
-          isRead,
-        },
-      ]);
-      socket.emit("mark-as-read", readData);
+      if (groupId === selectedFriend?.id) {
+        const isSender = senderId === session?.user?._id;
+        setMessages((prevMessages) => [
+          ...prevMessages,
+          {
+            text: message,
+            fileUrls,
+            sender: isSender,
+            senderName,
+            groupId,
+            timestamp,
+            isRead,
+          },
+        ]);
+        socket.emit("mark-as-read", readData);
+      }
     };
 
     const handleReadMessageUpdate = () => {
