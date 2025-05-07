@@ -8,9 +8,11 @@ import {
   getFriendRequests,
 } from "../api/server-action";
 import { useFriend } from "../context/FriendContext";
+import { useSocket } from "../context/SocketContext";
 import Toast from "./Toast";
 
 export default function ContactScreen({ session }) {
+  const socket = useSocket();
   const { selectedFriend, setSelectedFriend } = useFriend();
   const [users, setUsers] = useState([]);
   const [friendRequests, setFriendRequests] = useState([]);
@@ -75,10 +77,18 @@ export default function ContactScreen({ session }) {
     setLoading((prev) => ({ ...prev, [friendId]: true }));
     try {
       const res = await acceptFriend(friendId);
+      // const userId = session?.user?.id;
+      // socket.emit("accept-friend-request", { friendId, userId }, (response) => {
+      //   if (response.status === 200) {
+      //     showToast("success", response.message);
+      //   } else {
+      //     showToast("error", response.message);
+      //   }
+      // });
+      showToast("success", res.message);
       setFriendRequests((prevRequests) =>
         prevRequests.filter((request) => request?.friendId?._id !== friendId)
       );
-      showToast("success", res.message);
     } catch (error) {
       showToast("error", `Error accepting friend request: ${error}`);
     }

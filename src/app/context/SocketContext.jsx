@@ -9,7 +9,8 @@ export const SocketProvider = ({ children, session }) => {
   const [socket, setSocket] = useState(null);
 
   useEffect(() => {
-    const newSocket = io("https://chatapi.motionsoft.com.bd/"); // Replace with your WebSocket server URL
+    //const newSocket = io("https://chatapi.motionsoft.com.bd/"); // Replace with your WebSocket server URL
+    const newSocket = io("http://localhost:3011/"); // Replace with your WebSocket server URL
     setSocket(newSocket);
 
     return () => newSocket.disconnect();

@@ -134,3 +134,13 @@ export const addGroup = async (name, adminId, memberIds) => {
   );
   return result;
 };
+
+export const signUp = async (userData) => {
+  console.log(userData);
+  const result = await apiRequestWithServer(
+    `${process.env.BASE_URL}/users/register`,
+    "POST",
+    userData
+  );
+  return result;
+};
