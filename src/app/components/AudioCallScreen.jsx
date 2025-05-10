@@ -11,20 +11,18 @@ export default function AudioCallScreen({ onBack, session, socket }) {
   const [stream, setStream] = useState(null);
   const [muted, setMuted] = useState(false);
   const [incomingCall, setIncomingCall] = useState(null);
-  const [iceCandidates, setIceCandidates] = useState([]); // Store ICE candidates before setting remote description
-  const [callStatus, setCallStatus] = useState("idle"); // 'idle', 'calling', 'ringing', 'in-call'
+  const [callStatus, setCallStatus] = useState("idle");
 
   const pendingCandidates = useRef([]);
-
   const userAudioRef = useRef();
   const peerAudioRef = useRef();
   const peerConnectionRef = useRef(null);
 
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      setStream(stream);
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((mediaStream) => {
+      setStream(mediaStream);
       if (userAudioRef.current) {
-        userAudioRef.current.srcObject = stream;
+        userAudioRef.current.srcObject = mediaStream;
       }
     });
 
@@ -42,65 +40,47 @@ export default function AudioCallScreen({ onBack, session, socket }) {
         peerConnectionRef.current
           .setRemoteDescription(new RTCSessionDescription(answer))
           .then(() => {
-            console.log("Remote description set after answer.");
-            // Process pending ICE candidates
             pendingCandidates.current.forEach((candidate) => {
-              try {
-                peerConnectionRef.current.addIceCandidate(
-                  new RTCIceCandidate(candidate)
-                );
-              } catch (error) {
-                console.error("Error adding pending candidate:", error);
-              }
+              peerConnectionRef.current.addIceCandidate(
+                new RTCIceCandidate(candidate)
+              );
             });
-            pendingCandidates.current = []; // Clear pending candidates
+            pendingCandidates.current = [];
           })
-          .catch((error) =>
-            console.error("Error setting remote description:", error)
-          );
+          .catch((error) => console.error("Remote description error:", error));
       }
     });
 
-    socket.on("ice-candidate", ({ from, candidate }) => {
-      console.log("🔹 ICE Candidate received:", candidate);
-
-      if (!peerConnectionRef.current) {
-        console.warn("Peer connection not established. Storing ICE candidate.");
+    socket.on("ice-candidate", ({ candidate }) => {
+      if (
+        !peerConnectionRef.current ||
+        !peerConnectionRef.current.remoteDescription
+      ) {
         pendingCandidates.current.push(candidate);
         return;
       }
-
-      if (!peerConnectionRef.current.remoteDescription) {
-        console.warn("Remote description not set. Storing ICE candidate.");
-        pendingCandidates.current.push(candidate);
-        return;
-      }
-
-      try {
-        peerConnectionRef.current
-          .addIceCandidate(new RTCIceCandidate(candidate))
-          .then(() => console.log("ICE candidate added."))
-          .catch((error) =>
-            console.error("Error adding ICE candidate:", error)
-          );
-      } catch (error) {
-        console.error("ICE candidate handling error:", error);
-      }
+      peerConnectionRef.current
+        .addIceCandidate(new RTCIceCandidate(candidate))
+        .catch((error) => console.error("ICE candidate error:", error));
     });
-
-    callUser();
 
     return () => {
       socket.off("incoming-call");
       socket.off("call-answered");
       socket.off("ice-candidate");
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
+
+      stream?.getTracks().forEach((track) => track.stop());
       peerConnectionRef.current?.close();
-      setCallStatus("idle"); // Reset call status
+      peerConnectionRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    // Once stream is ready, initiate call
+    if (stream && selectedFriend?.id && callStatus === "idle") {
+      callUser();
+    }
+  }, [stream]);
 
   const createPeerConnection = (otherUserId) => {
     const pc = new RTCPeerConnection({
@@ -108,7 +88,6 @@ export default function AudioCallScreen({ onBack, session, socket }) {
     });
 
     pc.ontrack = (event) => {
-      console.log("🎧 Audio track received:", event.streams[0]);
       if (peerAudioRef.current) {
         peerAudioRef.current.srcObject = event.streams[0];
       }
@@ -116,26 +95,10 @@ export default function AudioCallScreen({ onBack, session, socket }) {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("📡 Sending ICE Candidate:", event.candidate);
         socket.emit("ice-candidate", {
           to: otherUserId,
           candidate: event.candidate,
         });
-      }
-    };
-
-    pc.onnegotiationneeded = async () => {
-      try {
-        const offerOptions = {
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: false,
-        };
-        const offer = await pc.createOffer(offerOptions);
-        console.log("Local Offer SDP:", offer.sdp);
-        await pc.setLocalDescription(offer);
-        socket.emit("call-user", { to: selectedFriend.id, offer });
-      } catch (error) {
-        console.error("Error during negotiation:", error);
       }
     };
 
@@ -147,86 +110,61 @@ export default function AudioCallScreen({ onBack, session, socket }) {
   };
 
   const callUser = async () => {
-    if (!selectedFriend?.id || callStatus !== "idle") return; // Prevent multiple calls
-    console.log("📞 Calling user:", selectedFriend.id);
-    setCallStatus("calling");
+    if (!selectedFriend?.id) return;
 
+    setCallStatus("calling");
     const pc = createPeerConnection(selectedFriend.id);
     peerConnectionRef.current = pc;
 
     try {
-      const offerOptions = {
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: false,
-      };
-      const offer = await pc.createOffer(offerOptions);
-      console.log("Local Offer SDP:", offer.sdp);
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
       socket.emit("call-user", { to: selectedFriend.id, offer });
     } catch (error) {
-      console.error("Error during call setup:", error);
-      setCallStatus("idle"); // Reset on error
-      peerConnectionRef.current?.close(); // Close the connection
+      console.error("Call setup error:", error);
+      setCallStatus("idle");
+      pc.close();
       peerConnectionRef.current = null;
     }
   };
 
   const acceptCall = async () => {
-    if (!incomingCall || callStatus !== "ringing") return; // Prevent multiple acceptances
-    const { from, offer } = incomingCall;
-    console.log("✅ Accepting call from:", from);
-    setCallStatus("in-call");
+    if (!incomingCall) return;
 
+    const { from, offer } = incomingCall;
+    setCallStatus("in-call");
     const pc = createPeerConnection(from);
     peerConnectionRef.current = pc;
 
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      console.log("Remote Offer SDP:", offer.sdp);
-
       const answer = await pc.createAnswer();
-      console.log("Local Answer SDP:", answer.sdp);
       await pc.setLocalDescription(answer);
       socket.emit("answer-call", { to: from, answer });
       setIncomingCall(null);
 
-      // Process pending ICE candidates (if any)
       pendingCandidates.current.forEach((candidate) => {
-        try {
-          peerConnectionRef.current.addIceCandidate(
-            new RTCIceCandidate(candidate)
-          );
-        } catch (error) {
-          console.error("Error adding pending candidate:", error);
-        }
+        pc.addIceCandidate(new RTCIceCandidate(candidate));
       });
-      pendingCandidates.current = []; // Clear pending candidates
+      pendingCandidates.current = [];
     } catch (error) {
       console.error("Error accepting call:", error);
-      setCallStatus("idle"); // Reset on error
-      peerConnectionRef.current?.close(); // Close the connection
+      setCallStatus("idle");
+      pc.close();
       peerConnectionRef.current = null;
-      setIncomingCall(null);
-      return; // Exit to prevent further execution
     }
   };
 
   const endCall = () => {
-    console.log("❌ Ending call...");
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
-      socket.emit("call-ended", { to: selectedFriend?.id }); // Notify the other peer
+      socket.emit("call-ended", { to: selectedFriend?.id });
     }
-
-    userAudioRef.current = null;
-
-    setStream(null);
+    setCallStatus("idle");
     setIncomingCall(null);
-    setCallStatus("idle"); // Reset the call status
+    setStream(null);
     setSelectedScreen("chat");
     onBack();
-    pendingCandidates.current = []; // Clear pending candidates
-    peerConnectionRef.current = null;
   };
 
   const toggleMute = () => {
@@ -249,7 +187,7 @@ export default function AudioCallScreen({ onBack, session, socket }) {
       {callStatus === "ringing" ? (
         <div className="text-center p-4 bg-white rounded-lg shadow-lg">
           <h3 className="text-xl font-bold text-gray-800">Incoming Call</h3>
-          <p className="text-gray-500">From: {incomingCall.from}</p>
+          <p className="text-gray-500">From: {incomingCall?.from}</p>
           <div className="flex space-x-4 mt-4">
             <button
               className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
