@@ -6,23 +6,30 @@ import { useFriend } from "../context/FriendContext";
 import { useScreen } from "../context/ScreenContext";
 
 export default function AudioCallScreen({ onBack, session, socket }) {
-  const { setSelectedScreen } = useScreen();
+  const {
+    setSelectedScreen,
+    incomingCall,
+    setIncomingCall,
+    callStatus,
+    setCallStatus,
+  } = useScreen();
   const { selectedFriend } = useFriend();
   const [stream, setStream] = useState(null);
   const [muted, setMuted] = useState(false);
-  const [incomingCall, setIncomingCall] = useState(null);
-  const [callStatus, setCallStatus] = useState("idle");
+
+  const [iceCandidates, setIceCandidates] = useState([]); // Store ICE candidates before setting remote description
 
   const pendingCandidates = useRef([]);
+
   const userAudioRef = useRef();
   const peerAudioRef = useRef();
   const peerConnectionRef = useRef(null);
 
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((mediaStream) => {
-      setStream(mediaStream);
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      setStream(stream);
       if (userAudioRef.current) {
-        userAudioRef.current.srcObject = mediaStream;
+        userAudioRef.current.srcObject = stream;
       }
     });
 
@@ -32,55 +39,90 @@ export default function AudioCallScreen({ onBack, session, socket }) {
       setCallStatus("ringing");
     });
 
-    socket.on("call-answered", ({ from, answer }) => {
+    socket.on("call-answered", async ({ from, answer }) => {
       console.log("✅ Call answered by:", from);
       setCallStatus("in-call");
 
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current
-          .setRemoteDescription(new RTCSessionDescription(answer))
-          .then(() => {
-            pendingCandidates.current.forEach((candidate) => {
-              peerConnectionRef.current.addIceCandidate(
-                new RTCIceCandidate(candidate)
-              );
-            });
-            pendingCandidates.current = [];
-          })
-          .catch((error) => console.error("Remote description error:", error));
+      const pc = peerConnectionRef.current;
+
+      if (!pc) {
+        console.warn("⚠️ peerConnectionRef is null");
+        return;
+      }
+
+      // Prevent setting remote description again if already stable
+      if (pc.signalingState !== "have-local-offer") {
+        console.warn(
+          "⚠️ Skipping setRemoteDescription: signaling state is",
+          pc.signalingState
+        );
+        return;
+      }
+
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log("📡 Remote description set after answer");
+
+        // Process pending ICE candidates
+        if (pendingCandidates.current && pendingCandidates.current.length > 0) {
+          for (const candidate of pendingCandidates.current) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (err) {
+              console.error("❌ Error adding ICE candidate:", err);
+            }
+          }
+          pendingCandidates.current = [];
+        }
+      } catch (err) {
+        console.error("❌ Failed to handle call answer:", err);
       }
     });
 
-    socket.on("ice-candidate", ({ candidate }) => {
-      if (
-        !peerConnectionRef.current ||
-        !peerConnectionRef.current.remoteDescription
-      ) {
+    socket.on("ice-candidate", ({ from, candidate }) => {
+      console.log("🔹 ICE Candidate received:", candidate);
+
+      if (!peerConnectionRef.current) {
+        console.warn("Peer connection not established. Storing ICE candidate.");
         pendingCandidates.current.push(candidate);
         return;
       }
-      peerConnectionRef.current
-        .addIceCandidate(new RTCIceCandidate(candidate))
-        .catch((error) => console.error("ICE candidate error:", error));
+
+      if (!peerConnectionRef.current.remoteDescription) {
+        console.warn("Remote description not set. Storing ICE candidate.");
+        pendingCandidates.current.push(candidate);
+        return;
+      }
+
+      try {
+        peerConnectionRef.current
+          .addIceCandidate(new RTCIceCandidate(candidate))
+          .then(() => console.log("ICE candidate added."))
+          .catch((error) =>
+            console.error("Error adding ICE candidate:", error)
+          );
+      } catch (error) {
+        console.error("ICE candidate handling error:", error);
+      }
     });
+
+    console.log(callStatus);
+
+    if (callStatus === "idle") {
+      callUser();
+    }
 
     return () => {
       socket.off("incoming-call");
       socket.off("call-answered");
       socket.off("ice-candidate");
-
-      stream?.getTracks().forEach((track) => track.stop());
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
       peerConnectionRef.current?.close();
-      peerConnectionRef.current = null;
+      //setCallStatus("idle"); // Reset call status
     };
   }, []);
-
-  useEffect(() => {
-    // Once stream is ready, initiate call
-    if (stream && selectedFriend?.id && callStatus === "idle") {
-      callUser();
-    }
-  }, [stream]);
 
   const createPeerConnection = (otherUserId) => {
     const pc = new RTCPeerConnection({
@@ -88,6 +130,7 @@ export default function AudioCallScreen({ onBack, session, socket }) {
     });
 
     pc.ontrack = (event) => {
+      console.log("🎧 Audio track received:", event.streams[0]);
       if (peerAudioRef.current) {
         peerAudioRef.current.srcObject = event.streams[0];
       }
@@ -95,10 +138,26 @@ export default function AudioCallScreen({ onBack, session, socket }) {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("📡 Sending ICE Candidate:", event.candidate);
         socket.emit("ice-candidate", {
           to: otherUserId,
           candidate: event.candidate,
         });
+      }
+    };
+
+    pc.onnegotiationneeded = async () => {
+      try {
+        const offerOptions = {
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: false,
+        };
+        const offer = await pc.createOffer(offerOptions);
+        console.log("Local Offer SDP:", offer.sdp);
+        await pc.setLocalDescription(offer);
+        socket.emit("call-user", { to: selectedFriend.id, offer });
+      } catch (error) {
+        console.error("Error during negotiation:", error);
       }
     };
 
@@ -110,61 +169,86 @@ export default function AudioCallScreen({ onBack, session, socket }) {
   };
 
   const callUser = async () => {
-    if (!selectedFriend?.id) return;
-
+    if (!selectedFriend?.id || callStatus !== "idle") return; // Prevent multiple calls
+    console.log("📞 Calling user:", selectedFriend.id);
     setCallStatus("calling");
+
     const pc = createPeerConnection(selectedFriend.id);
     peerConnectionRef.current = pc;
 
     try {
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      const offerOptions = {
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: false,
+      };
+      const offer = await pc.createOffer(offerOptions);
+      console.log("Local Offer SDP:", offer.sdp);
       await pc.setLocalDescription(offer);
       socket.emit("call-user", { to: selectedFriend.id, offer });
     } catch (error) {
-      console.error("Call setup error:", error);
-      setCallStatus("idle");
-      pc.close();
+      console.error("Error during call setup:", error);
+      setCallStatus("idle"); // Reset on error
+      peerConnectionRef.current?.close(); // Close the connection
       peerConnectionRef.current = null;
     }
   };
 
   const acceptCall = async () => {
-    if (!incomingCall) return;
-
+    if (!incomingCall || callStatus !== "ringing") return; // Prevent multiple acceptances
     const { from, offer } = incomingCall;
+    console.log("✅ Accepting call from:", from);
     setCallStatus("in-call");
+
     const pc = createPeerConnection(from);
     peerConnectionRef.current = pc;
 
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      console.log("Remote Offer SDP:", offer.sdp);
+
       const answer = await pc.createAnswer();
+      console.log("Local Answer SDP:", answer.sdp);
       await pc.setLocalDescription(answer);
       socket.emit("answer-call", { to: from, answer });
       setIncomingCall(null);
 
+      // Process pending ICE candidates (if any)
       pendingCandidates.current.forEach((candidate) => {
-        pc.addIceCandidate(new RTCIceCandidate(candidate));
+        try {
+          peerConnectionRef.current.addIceCandidate(
+            new RTCIceCandidate(candidate)
+          );
+        } catch (error) {
+          console.error("Error adding pending candidate:", error);
+        }
       });
-      pendingCandidates.current = [];
+      pendingCandidates.current = []; // Clear pending candidates
     } catch (error) {
       console.error("Error accepting call:", error);
-      setCallStatus("idle");
-      pc.close();
+      setCallStatus("idle"); // Reset on error
+      peerConnectionRef.current?.close(); // Close the connection
       peerConnectionRef.current = null;
+      setIncomingCall(null);
+      return; // Exit to prevent further execution
     }
   };
 
   const endCall = () => {
+    console.log("❌ Ending call...");
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
-      socket.emit("call-ended", { to: selectedFriend?.id });
+      socket.emit("call-ended", { to: selectedFriend?.id }); // Notify the other peer
     }
-    setCallStatus("idle");
-    setIncomingCall(null);
+
+    userAudioRef.current = null;
+
     setStream(null);
+    setIncomingCall(null);
+    setCallStatus("idle"); // Reset the call status
     setSelectedScreen("chat");
     onBack();
+    pendingCandidates.current = []; // Clear pending candidates
+    peerConnectionRef.current = null;
   };
 
   const toggleMute = () => {
@@ -187,7 +271,7 @@ export default function AudioCallScreen({ onBack, session, socket }) {
       {callStatus === "ringing" ? (
         <div className="text-center p-4 bg-white rounded-lg shadow-lg">
           <h3 className="text-xl font-bold text-gray-800">Incoming Call</h3>
-          <p className="text-gray-500">From: {incomingCall?.from}</p>
+          <p className="text-gray-500">From: {incomingCall.from}</p>
           <div className="flex space-x-4 mt-4">
             <button
               className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"

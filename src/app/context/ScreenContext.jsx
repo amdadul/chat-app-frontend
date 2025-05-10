@@ -7,9 +7,23 @@ const ScreenContext = createContext();
 // Provide context
 export const ScreenProvider = ({ children }) => {
   const [selectedScreen, setSelectedScreen] = useState("chat");
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [callStatus, setCallStatus] = useState("idle");
+  const [callType, setCallType] = useState("audio");
 
   return (
-    <ScreenContext.Provider value={{ selectedScreen, setSelectedScreen }}>
+    <ScreenContext.Provider
+      value={{
+        selectedScreen,
+        setSelectedScreen,
+        incomingCall,
+        setIncomingCall,
+        callStatus,
+        setCallStatus,
+        callType,
+        setCallType,
+      }}
+    >
       {children}
     </ScreenContext.Provider>
   );

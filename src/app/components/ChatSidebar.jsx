@@ -20,7 +20,13 @@ import SettingsScreen from "./SettingsScreen";
 export default function ChatSidebar({ onSelect, session }) {
   const socket = useSocket();
   const { selectedFriend, setSelectedFriend } = useFriend();
-  const { setSelectedScreen } = useScreen();
+  const {
+    setSelectedScreen,
+    incomingCall,
+    setIncomingCall,
+    callStatus,
+    setCallStatus,
+  } = useScreen();
   const [activeTab, setActiveTab] = useState("Chats");
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
@@ -66,6 +72,12 @@ export default function ChatSidebar({ onSelect, session }) {
 
     socket.on("messageUpdate", handleMessageUpdate);
     socket.on("playNotification", playNotification);
+    socket.on("incoming-call", ({ from, offer }) => {
+      console.log("📞 Incoming call from:", from);
+      setIncomingCall({ from, offer });
+      setCallStatus("ringing");
+      setSelectedScreen("audio");
+    });
 
     fetchFriends();
 
